@@ -5,11 +5,19 @@ use std::ops::Add;
 
 use chrono::Duration;
 use nu_ansi_term::Style;
+use serde::{Serializer, Serialize};
+use serde::ser::{SerializeMap};
 use textwrap;
+
+extern crate serde;
+extern crate serde_json;
 
 use crate::conf;
 use crate::data::activity;
 use crate::view::format_util;
+use crate::view::format_util::Format;
+
+use super::list::SerializableDuration;
 
 type ProjectMap<'a> = BTreeMap<&'a str, (Vec<&'a activity::Activity>, Duration)>;
 
@@ -24,6 +32,40 @@ impl<'a> Report<'a> {
             project_map: create_project_map(activities),
             total_duration: sum_duration(activities),
         }
+    }
+}
+
+#[derive(Serialize)]
+struct Project<'a> {
+    project: &'a str,
+    activities: Vec<&'a activity::Activity>,
+    duration: SerializableDuration,
+}
+
+impl<'a> serde::Serialize for Report<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut report_map = serializer.serialize_map(Some(2))?;
+        report_map.serialize_entry(
+            "totalDuration",
+            &SerializableDuration::from(&self.total_duration),
+        )?;
+        
+        report_map.serialize_entry(
+            "projects", 
+            &self.project_map.clone().into_iter()
+            .map(|(name, (activities, duration))| {
+                Project {
+                    project: name,
+                    activities: activities.clone(),
+                    duration: SerializableDuration::from(&duration)
+                }
+            }).collect::<Vec<_>>()
+        )?;
+        
+        report_map.end()
     }
 }
 
@@ -58,9 +100,12 @@ impl<'a> fmt::Display for Report<'a> {
     }
 }
 
-pub fn show_activities<'a>(activities: &'a [&'a activity::Activity]) {
+pub fn show_activities<'a>(activities: &'a [&'a activity::Activity], format: Format) {
     let report = Report::new(activities);
-    println!("\n{}", report);
+    match format {
+        Format::SHELL => println!("{}", report),
+        Format::JSON => println!("{}", serde_json::to_string(&report).unwrap()),
+    }
 }
 
 fn create_project_map<'a>(activities: &'a [&'a activity::Activity]) -> ProjectMap {
